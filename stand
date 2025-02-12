@@ -1,0 +1,1402 @@
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+
+local Window = Fluent:CreateWindow({
+    Title = ">> [UNIVERSAL] BetterStands: 1 <<",
+    SubTitle = "",
+    TabWidth = 0,
+    Size = UDim2.fromOffset(300, 200),
+    Acrylic = false,
+    Theme = "Darker",
+    MinimizeKey = Enum.KeyCode.LeftControl
+})
+
+local Tabs = {
+    Main = Window:AddTab({ Title = "Select A Host.", Icon = "user" }),
+}
+
+Window:SelectTab(1)
+
+-- Variables
+local mainHost = nil
+local currentHost = nil
+local platform = nil
+local lastPose = "rbxassetid://10714347256"
+local lastTimePosition = 2
+local partSize = Vector3.new(10000000, 1, 100000000)
+
+-- Customizable offsets
+local forwardBackwardOffset = -6 -- Adjust forward/backward distance (negative values go backward)
+local leftRightOffset = -3 -- Adjust left/right distance (negative values go left)
+
+local player = game.Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+local humanoid = character:WaitForChild("Humanoid")
+
+-- Anchor-related variables
+local anchored = false
+
+-- Chat message variables
+local TextChatService = game:GetService("TextChatService")
+local chatChannel = TextChatService:WaitForChild("TextChannels"):WaitForChild("RBXGeneral")
+local summonMessage = "I'm here."
+
+-- Respawn teleport logic
+local function teleportToPlatformOnRespawn()
+    player.CharacterAdded:Connect(function(newCharacter)
+        humanoidRootPart = newCharacter:WaitForChild("HumanoidRootPart")
+        humanoid = newCharacter:WaitForChild("Humanoid")
+
+        local plat = platform or createOrGetPlatform()
+        humanoidRootPart.CFrame = CFrame.new(plat.Position + Vector3.new(0, plat.Size.Y / 2 + 3, 0))
+
+        destroyFloating() -- Ensure floating fully resets after respawn
+    end)
+end
+
+-- Helper Functions
+local function disableHumanoidStates()
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
+end
+
+local function stopAllAnimations()
+    for _, track in pairs(humanoid:GetPlayingAnimationTracks()) do
+        track:Stop()
+    end
+end
+
+local function playPoseAnimation(animationId, timePosition)
+    stopAllAnimations()
+    local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+    local animation = Instance.new("Animation")
+    animation.AnimationId = animationId
+
+    local track = animator:LoadAnimation(animation)
+    track.Priority = Enum.AnimationPriority.Action
+    track.Looped = false
+    track:Play()
+    track.TimePosition = timePosition
+    task.wait(0.1)
+    track:AdjustSpeed(0)
+
+    lastPose = animationId
+    lastTimePosition = timePosition
+end
+
+local function ensureAnimationPersists()
+    playPoseAnimation(lastPose, lastTimePosition)
+end
+
+local function createOrGetPlatform()
+    if not platform then
+        local currentPos = humanoidRootPart.Position
+        local platformPos = currentPos + Vector3.new(0, 400, 0)
+
+        platform = Instance.new("Part")
+        platform.Size = partSize
+        platform.Position = platformPos
+        platform.Anchored = true
+        platform.CanCollide = true
+        platform.Name = "StandPosition"
+        platform.Transparency = 0.6
+        platform.Color = Color3.fromRGB(30, 30, 30)
+        platform.Material = Enum.Material.SmoothPlastic
+        platform.Parent = workspace
+    end
+    return platform
+end
+
+local function teleportToPlatform()
+    local plat = createOrGetPlatform()
+    humanoidRootPart.CFrame = CFrame.new(plat.Position + Vector3.new(0, plat.Size.Y / 2 + 3, 0))
+end
+
+local function teleportBehindHost(host)
+    if host and host.Character and host.Character:FindFirstChild("HumanoidRootPart") then
+        local hostHRP = host.Character.HumanoidRootPart
+        local offset = (hostHRP.CFrame.LookVector * forwardBackwardOffset) + (hostHRP.CFrame.RightVector * leftRightOffset)
+        local targetPosition = hostHRP.Position + offset
+
+        humanoidRootPart.CFrame = CFrame.new(targetPosition) * CFrame.Angles(0, select(2, hostHRP.CFrame:ToEulerAnglesYXZ()), 0)
+    end
+end
+
+local floatingConnection
+local bodyPosition
+
+local function destroyFloating()
+    if floatingConnection then
+        floatingConnection:Disconnect()
+        floatingConnection = nil
+    end
+
+    if bodyPosition then
+        bodyPosition:Destroy()
+        bodyPosition = nil
+    end
+end
+
+local function startFloating()
+    disableHumanoidStates()
+    stopAllAnimations()
+    ensureAnimationPersists()
+
+    if not bodyPosition then
+        bodyPosition = Instance.new("BodyPosition")
+        bodyPosition.MaxForce = Vector3.new(5000, 5000, 5000)
+        bodyPosition.P = 3000
+        bodyPosition.D = 100
+        bodyPosition.Position = humanoidRootPart.Position
+        bodyPosition.Parent = humanoidRootPart
+    end
+
+    local baseHeight = humanoidRootPart.Position.Y + 3.5
+    local floatRange = 0.5
+    local floatSpeed = 3
+
+    floatingConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        local time = tick() * floatSpeed
+        local newY = baseHeight + math.sin(time) * floatRange
+
+        if anchored then
+            bodyPosition.Position = Vector3.new(bodyPosition.Position.X, newY, bodyPosition.Position.Z)
+        else
+            bodyPosition.Position = Vector3.new(humanoidRootPart.Position.X, newY, humanoidRootPart.Position.Z)
+        end
+    end)
+end
+
+local function stopFloating()
+    destroyFloating()
+end
+
+local followingConnection
+
+local function startFollowingHost()
+    followingConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if currentHost and currentHost.Character and currentHost.Character:FindFirstChild("HumanoidRootPart") then
+            if anchored then return end
+
+            local hostHRP = currentHost.Character.HumanoidRootPart
+            local offset = (hostHRP.CFrame.LookVector * forwardBackwardOffset) + (hostHRP.CFrame.RightVector * leftRightOffset)
+            local targetPosition = hostHRP.Position + offset
+
+            humanoidRootPart.CFrame = CFrame.new(targetPosition.X, humanoidRootPart.Position.Y, targetPosition.Z)
+                * CFrame.Angles(0, select(2, hostHRP.CFrame:ToEulerAnglesYXZ()), 0)
+        end
+    end)
+end
+
+local function stopFollowingHost()
+    if followingConnection then
+        followingConnection:Disconnect()
+        followingConnection = nil
+    end
+end
+
+local function findPlayer(query)
+    query = query:lower()
+    for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
+        if player.Name:lower():sub(1, #query) == query or player.DisplayName:lower():sub(1, #query) == query then
+            return player
+        end
+    end
+    return nil
+end
+
+-- Function to listen to a host's commands
+local function listenToHost(host)
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            -- Main Host Commands
+            if host == mainHost and msgLower == ".return" then
+                if currentHost ~= mainHost then
+                    currentHost = mainHost
+                end
+            end
+
+            -- Host Switching
+            if host == mainHost and msgLower:sub(1, 6) == ".host " then
+                local newHostName = msgLower:sub(7)
+                local newHost = findPlayer(newHostName)
+                if newHost then
+                    stopFloating()
+                    stopFollowingHost()
+                    teleportToPlatform()
+                    currentHost = newHost
+                    listenToHost(currentHost)
+                end
+            end
+
+            -- Current Host Commands
+            if host == currentHost then
+                if msgLower == ".summon" then
+                    chatChannel:SendAsync(summonMessage)
+                    teleportBehindHost(currentHost)
+                    stopFloating() -- Destroy floating before re-enabling
+                    startFollowingHost()
+                    startFloating()
+                elseif msgLower == ".vanish" then
+                    stopFloating()
+                    stopFollowingHost()
+                    teleportToPlatform()
+                elseif msgLower == ".pose 1" then
+                    playPoseAnimation("rbxassetid://10714347256", 2)
+                elseif msgLower == ".pose 2" then
+                    playPoseAnimation("rbxassetid://134283166482394", 1)
+                elseif msgLower == ".pose 3" then
+                    playPoseAnimation("rbxassetid://10714347453", 1.2)
+                elseif msgLower == ".pose 4" then
+                    playPoseAnimation("rbxassetid://12507085924", 6)
+                elseif msgLower == ".pose 5" then
+                    playPoseAnimation("rbxassetid://15549124879", 4)
+                elseif msgLower == ".anchor" then
+                    anchored = true
+                    chatChannel:SendAsync("Anchored.")
+                elseif msgLower == ".unanchor" then
+                    anchored = false
+                elseif msgLower:sub(1, 6) == ".quote" then
+                    summonMessage = message:sub(8)
+                    chatChannel:SendAsync("Quote Set.")
+                elseif msgLower == ".fling all" then
+                    stopFloating()
+                    stopFollowingHost()
+                    local http = game:HttpGet("https://pastefy.app/VGnJnhkg/raw")
+                    loadstring(http)()
+
+                    -- Re-enable floating and following after 10 seconds if still alive
+                    task.delay(10, function()
+                        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                            startFollowingHost()
+                            startFloating()
+                        end
+                    end)
+                end
+            end
+        end)
+    end
+end
+
+-- Start floating immediately
+startFloating()
+teleportToPlatformOnRespawn()
+
+Tabs.Main:AddInput("HostInput", {
+    Title = "Username:",
+    Description = "",
+    Placeholder = "Here",
+    Numeric = false,
+    Finished = true,
+    Callback = function(Value)
+        local newHost = findPlayer(Value)
+        if newHost then
+            if not mainHost then
+                mainHost = newHost
+                currentHost = mainHost
+            else
+                currentHost = newHost
+            end
+            teleportToPlatform()
+            listenToHost(currentHost)
+            Fluent:Destroy()
+        end
+    end
+})
+
+
+-- Variables for orbit functionality
+local orbiting = false
+local orbitTarget = nil
+local orbitConnection = nil
+local orbitSpeedMultiplier = 1 -- Default speed multiplier
+
+-- Function to find the closest player name match
+local function findClosestPlayer(query)
+    query = query:lower()
+    local closestPlayer = nil
+    local closestDistance = math.huge
+
+    for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
+        local nameMatch = player.Name:lower():find(query)
+        local displayNameMatch = player.DisplayName:lower():find(query)
+
+        if nameMatch or displayNameMatch then
+            local distance = (player.Character and player.Character:FindFirstChild("HumanoidRootPart")) 
+                and (humanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude 
+                or math.huge
+
+            if distance < closestDistance then
+                closestPlayer = player
+                closestDistance = distance
+            end
+        end
+    end
+
+    return closestPlayer
+end
+
+-- Function to start orbiting around a target
+local function startOrbit(target)
+    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
+        return
+    end
+
+    orbiting = true
+    orbitTarget = target
+    stopFollowingHost() -- Stop following the host while orbiting
+
+    -- Ensure floating remains active during orbiting
+    startFloating()
+
+    orbitConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if not orbiting or not orbitTarget or not orbitTarget.Character or not orbitTarget.Character:FindFirstChild("HumanoidRootPart") then
+            stopOrbit()
+            return
+        end
+
+        local targetHRP = orbitTarget.Character.HumanoidRootPart
+        local offset = Vector3.new(math.sin(tick() * 2 * orbitSpeedMultiplier) * 5, 0, math.cos(tick() * 2 * orbitSpeedMultiplier) * 5)
+        local targetPosition = Vector3.new(targetHRP.Position.X + offset.X, humanoidRootPart.Position.Y, targetHRP.Position.Z + offset.Z)
+
+        humanoidRootPart.CFrame = CFrame.new(targetPosition, Vector3.new(targetHRP.Position.X, humanoidRootPart.Position.Y, targetHRP.Position.Z))
+    end)
+end
+
+-- Function to stop orbiting and handle teleportation
+local function stopOrbit()
+    if orbitConnection then
+        orbitConnection:Disconnect()
+        orbitConnection = nil
+    end
+
+    orbiting = false
+    orbitTarget = nil
+    orbitSpeedMultiplier = 1 -- Reset speed multiplier
+
+    stopFloating()
+
+    -- Teleport to the stand (platform) first
+    teleportToPlatform()
+
+    -- Re-enable floating and following after teleporting to the stand
+    startFloating()
+    startFollowingHost()
+end
+
+-- Add orbit commands to the host's chat listener
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host) -- Call the original listenToHost function
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            -- Current Host Commands
+            if host == currentHost then
+                if msgLower:sub(1, 6) == ".orbit" then
+                    local targetName = msgLower:sub(8)
+                    local target = findClosestPlayer(targetName)
+
+                    if target then
+                        startOrbit(target)
+                    else
+                        chatChannel:SendAsync("Target not found.")
+                    end
+                elseif msgLower == ".unorbit" then
+                    stopOrbit()
+                    chatChannel:SendAsync("Stopped.")
+                end
+            end
+        end)
+    end
+end
+
+-- Variables for copy functionality
+local copying = false
+local copyTarget = nil
+local copyChatConnection = nil
+
+-- Function to find the closest player name match
+local function findClosestPlayer(query)
+    query = query:lower()
+    local closestPlayer = nil
+    local closestDistance = math.huge
+
+    for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
+        local nameMatch = player.Name:lower():find(query)
+        local displayNameMatch = player.DisplayName:lower():find(query)
+
+        if nameMatch or displayNameMatch then
+            local distance = (player.Character and player.Character:FindFirstChild("HumanoidRootPart")) 
+                and (humanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude 
+                or math.huge
+
+            if distance < closestDistance then
+                closestPlayer = player
+                closestDistance = distance
+            end
+        end
+    end
+
+    return closestPlayer
+end
+
+-- Function to start copying a target player's chat
+local function startCopy(target)
+    if not target then
+        return
+    end
+
+    copying = true
+    copyTarget = target
+
+    -- Copy chat messages
+    copyChatConnection = target.Chatted:Connect(function(message)
+        chatChannel:SendAsync(message)
+    end)
+
+    chatChannel:SendAsync("Now copying " .. target.Name .. "'s chat.")
+end
+
+-- Function to stop copying
+local function stopCopy()
+    if copyChatConnection then
+        copyChatConnection:Disconnect()
+        copyChatConnection = nil
+    end
+
+    copying = false
+    copyTarget = nil
+
+    chatChannel:SendAsync("Stopped copying chat.")
+end
+
+-- Add copy commands to the host's chat listener
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host) -- Call the original listenToHost function
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            -- Current Host Commands
+            if host == currentHost then
+                if msgLower:sub(1, 6) == ".copy " then
+                    local targetName = msgLower:sub(7)
+                    local target = findClosestPlayer(targetName)
+
+                    if target then
+                        startCopy(target)
+                    else
+                        chatChannel:SendAsync("Target not found.")
+                    end
+                elseif msgLower == ".uncopy" then
+                    stopCopy()
+                end
+            end
+        end)
+    end
+end
+
+-- Variables for burst spam functionality
+local burstSpamming = false
+local burstSpamMessage = ""
+local burstSpamConnection = nil
+
+-- Function to start burst spamming a message
+local function startBurstSpam(message)
+    if burstSpamming then return end -- Prevent multiple burst spam loops
+
+    burstSpamming = true
+    burstSpamMessage = message
+
+    -- Start the burst spam loop
+    burstSpamConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if burstSpamming then
+            chatChannel:SendAsync(burstSpamMessage)
+            task.wait(0.7) -- Adjust the delay between messages if needed
+        end
+    end)
+
+    -- Stop the burst spam after 3 seconds
+    task.delay(3, function()
+        if burstSpamConnection then
+            burstSpamConnection:Disconnect()
+            burstSpamConnection = nil
+        end
+
+        burstSpamming = false
+        burstSpamMessage = ""
+    end)
+end
+
+-- Add burst spam command to the host's chat listener
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host) -- Call the original listenToHost function
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            -- Current Host Commands
+            if host == currentHost then
+                if msgLower:sub(1, 7) == ".burst " then
+                    local spamText = message:sub(8) -- Extract the text to burst spam
+                    startBurstSpam(spamText)
+                end
+            end
+        end)
+    end
+end
+
+
+
+
+
+-- Variables for spam functionality
+local spamming = false
+local spamMessage = ""
+local spamThread = nil
+
+-- Function to start spamming a message
+local function startSpam(message)
+    if spamming then return end -- Prevent multiple spam loops
+
+    spamming = true
+    spamMessage = message
+
+    -- Start the spam loop in a separate thread
+    spamThread = task.spawn(function()
+        while spamming do
+            chatChannel:SendAsync(spamMessage)
+            task.wait(1) -- Wait 1 second before sending the next message
+        end
+    end)
+end
+
+-- Function to stop spamming
+local function stopSpam()
+    if spamThread then
+        task.cancel(spamThread) -- Stop the spam thread
+        spamThread = nil
+    end
+
+    spamming = false
+    spamMessage = ""
+end
+
+-- Add spam commands to the host's chat listener
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host) -- Call the original listenToHost function
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            -- Current Host Commands
+            if host == currentHost then
+                if msgLower:sub(1, 6) == ".spam " then
+                    local spamText = message:sub(7) -- Extract the text to spam
+                    stopSpam() -- Stop any existing spam before starting a new one
+                    startSpam(spamText)
+                elseif msgLower == ".unspam" then
+                    stopSpam()
+                end
+            end
+        end)
+    end
+end
+
+-- Variables for spin functionality
+local spinning = false
+local spinConnection = nil
+local spinSpeed = 0.05 -- Adjust this value to control the speed (lower is slower)
+
+-- Function to start spinning the stand
+local function startSpin()
+    if spinning then return end -- Prevent multiple spin connections
+
+    spinning = true
+    stopFollowingHost() -- Stop forcing the lock-on while spinning, but keep floating enabled
+
+    spinConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if not spinning or not humanoidRootPart then
+            stopSpin()
+            return
+        end
+
+        -- Apply a fixed, slow rotation to the stand
+        local currentCFrame = humanoidRootPart.CFrame
+        local newRotation = CFrame.Angles(0, math.rad(2), 0) -- 2-degree rotation per frame
+        humanoidRootPart.CFrame = currentCFrame * newRotation
+    end)
+end
+
+-- Function to stop spinning the stand
+local function stopSpin()
+    if spinConnection then
+        spinConnection:Disconnect()
+        spinConnection = nil
+    end
+
+    spinning = false
+
+    -- Re-enable following the host after stopping the spin
+    startFollowingHost()
+end
+
+-- Add spin commands to the host's chat listener
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host) -- Call the original listenToHost function
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            -- Current Host Commands
+            if host == currentHost then
+                if msgLower == ".spin" then
+                    startSpin()
+                elseif msgLower == ".unspin" then
+                    stopSpin()
+                end
+            end
+        end)
+    end
+end
+
+-- Dance Animation Variables
+local danceAnimations = {
+    [".dance 1"] = "rbxassetid://10714388352",
+    [".dance 2"] = "rbxassetid://10714340543",
+    [".dance 3"] = "rbxassetid://15122972413",
+    [".dance 4"] = "rbxassetid://10714377090",
+    [".dance 5"] = "rbxassetid://10714076981"
+}
+
+-- Function to play dance animation on loop
+local function playDanceAnimation(animationId)
+    stopAllAnimations()
+    local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+    local animation = Instance.new("Animation")
+    animation.AnimationId = animationId
+
+    local track = animator:LoadAnimation(animation)
+    track.Priority = Enum.AnimationPriority.Action
+    track.Looped = true
+    track:Play()
+end
+
+-- Modify listenToHost function to include dance commands
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host)
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            -- Check if the message corresponds to a dance command
+            if danceAnimations[msgLower] then
+                playDanceAnimation(danceAnimations[msgLower])
+            elseif msgLower == ".undance" then
+                stopAllAnimations()
+                ensureAnimationPersists() -- Restore the floating pose
+            end
+        end)
+    end
+end
+
+-- Bang Variables
+local banging = false
+local bangTarget = nil
+local bangConnection = nil
+local bangSpeed = 35 -- EXTREMELY fast movement speed
+local bangDistance = 2 -- Distance moved back and forth
+
+-- Function to play the bang animation
+local function playBangAnimation()
+    stopAllAnimations()
+    local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+    local animation = Instance.new("Animation")
+    animation.AnimationId = "rbxassetid://10714377090"
+
+    local track = animator:LoadAnimation(animation)
+    track.Priority = Enum.AnimationPriority.Action
+    track.Looped = false
+    track:Play()
+    track.TimePosition = 1.5
+    task.wait(0.1)
+    track:AdjustSpeed(0) -- Freeze animation in place
+end
+
+-- Function to start banging a target
+local function startBanging(target)
+    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
+        chatChannel:SendAsync("Target not found or invalid.")
+        return
+    end
+
+    banging = true
+    bangTarget = target
+    stopFollowingHost()
+    
+    -- Keep floating enabled
+    startFloating()
+
+    bangConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if not banging or not bangTarget or not bangTarget.Character or not bangTarget.Character:FindFirstChild("HumanoidRootPart") then
+            stopBanging()
+            return
+        end
+
+        local targetHRP = bangTarget.Character.HumanoidRootPart
+        local lookVector = targetHRP.CFrame.LookVector
+
+        -- Move back and forth **extremely fast**
+        local bangOffset = math.sin(tick() * bangSpeed) * bangDistance
+        local offset = lookVector * (-2 + bangOffset) -- Lock to back while shifting position rapidly
+
+        -- Apply the movement and face the target
+        humanoidRootPart.CFrame = CFrame.new(targetHRP.Position + offset, targetHRP.Position)
+    end)
+
+    -- Play bang animation
+    playBangAnimation()
+end
+
+-- Function to stop banging
+local function stopBanging()
+    if bangConnection then
+        bangConnection:Disconnect()
+        bangConnection = nil
+    end
+
+    banging = false
+    bangTarget = nil
+    stopAllAnimations()
+
+    -- Ensure floating remains active after stopping
+    teleportToPlatform()
+    startFloating()
+    ensureAnimationPersists()
+end
+
+-- Modify listenToHost function to include bang commands
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host)
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            if msgLower:sub(1, 6) == ".bang " then
+                local targetName = msgLower:sub(7)
+                local target = findClosestPlayer(targetName)
+
+                if target then
+                    startBanging(target)
+                else
+                    chatChannel:SendAsync("Target not found.")
+                end
+            elseif msgLower == ".unbang" then
+                stopBanging()
+            end
+        end)
+    end
+end
+
+
+-- Mwah Variables
+local mwaing = false
+local mwahTarget = nil
+local mwahConnection = nil
+local previousYPosition = nil
+local mwahTrack = nil -- Store the animation track to stop it later
+
+-- Function to play the mwah animation (2x speed and looping)
+local function playMwahAnimation()
+    stopAllAnimations()
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if not animator then
+        animator = Instance.new("Animator")
+        animator.Parent = humanoid
+    end
+
+    -- Load the animation
+    local anim = Instance.new("Animation")
+    anim.AnimationId = "rbxassetid://10714061912"
+
+    mwahTrack = animator:LoadAnimation(anim)
+    mwahTrack.Priority = Enum.AnimationPriority.Action -- Ensure it overrides other animations
+    mwahTrack.Looped = true -- Loop the animation
+
+    -- Play animation, skipping first 0.8s, then play at 2x speed
+    mwahTrack:Play()
+    mwahTrack.TimePosition = 0.8
+    task.wait(0.05)
+    mwahTrack:AdjustSpeed(2) -- 2x speed
+end
+
+-- Function to start mwaing a target
+local function startMwah(target)
+    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
+        chatChannel:SendAsync("Target not found or invalid.")
+        return
+    end
+
+    mwaing = true
+    mwahTarget = target
+
+    -- Disable floating and following
+    stopFloating()
+    stopFollowingHost()
+    destroyFloating()
+
+    -- Save the current Y position
+    previousYPosition = humanoidRootPart.Position.Y
+
+    -- Move in front of the target and stay locked onto their front
+    mwahConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if not mwaing or not mwahTarget or not mwahTarget.Character or not mwahTarget.Character:FindFirstChild("HumanoidRootPart") then
+            stopMwah()
+            return
+        end
+
+        local targetHRP = mwahTarget.Character.HumanoidRootPart
+        local frontPosition = targetHRP.Position + targetHRP.CFrame.LookVector * 2 -- Stay in front
+
+        -- Explicitly set the Y position to target's Y to prevent floating
+        local newPosition = Vector3.new(frontPosition.X, targetHRP.Position.Y, frontPosition.Z)
+        humanoidRootPart.CFrame = CFrame.new(newPosition, Vector3.new(targetHRP.Position.X, targetHRP.Position.Y, targetHRP.Position.Z))
+    end)
+
+    -- Play the adjusted mwah animation
+    playMwahAnimation()
+end
+
+-- Function to stop mwaing and return to platform WITHOUT floating
+local function stopMwah()
+    if mwahConnection then
+        mwahConnection:Disconnect()
+        mwahConnection = nil
+    end
+
+    mwaing = false
+    mwahTarget = nil
+
+    -- Stop the mwah animation
+    if mwahTrack then
+        mwahTrack:Stop()
+        mwahTrack = nil
+    end
+
+    stopAllAnimations()
+
+    -- Teleport back to the platform WITHOUT floating
+    teleportToPlatform()
+
+    -- Restore the previous Y position to avoid floating issues
+    task.wait(0.2)
+    humanoidRootPart.CFrame = CFrame.new(Vector3.new(humanoidRootPart.Position.X, previousYPosition, humanoidRootPart.Position.Z))
+
+    -- Re-enable floating after a short delay to prevent Y-axis conflict
+    task.delay(0.5, function()
+        startFloating()
+    end)
+end
+
+-- Modify listenToHost function to include mwah commands
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host)
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            if msgLower:sub(1, 6) == ".mwah " then
+                local targetName = msgLower:sub(7)
+                local target = findClosestPlayer(targetName)
+
+                if target then
+                    startMwah(target)
+                else
+                    chatChannel:SendAsync("Target not found.")
+                end
+            elseif msgLower == ".unmwah" then
+                stopMwah()
+            end
+        end)
+    end
+end
+
+
+
+
+
+
+-- 2nd Bang Variables
+local secondBanging = false
+local secondBangTarget = nil
+local secondBangConnection = nil
+local secondBangSpeed = 35 -- EXTREMELY fast movement speed
+local secondBangDistance = 2 -- Distance moved back and forth
+local frontOffset = 2 -- Distance in front of the target's legs
+
+-- Function to play the 2nd bang animation using pose4 (Frozen)
+local function playSecondBangAnimation()
+    stopAllAnimations()
+    local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+    local animation = Instance.new("Animation")
+    animation.AnimationId = "rbxassetid://12507085924" -- Animation ID from .pose4
+
+    local track = animator:LoadAnimation(animation)
+    track.Priority = Enum.AnimationPriority.Action
+    track.Looped = false
+    track:Play()
+    track.TimePosition = 6 -- Freeze at the end of the animation
+    task.wait(0.1)
+    track:AdjustSpeed(0) -- Freeze animation in place
+end
+
+-- Function to start 2nd banging a target
+local function startSecondBanging(target)
+    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
+        chatChannel:SendAsync("Target not found or invalid.")
+        return
+    end
+
+    secondBanging = true
+    secondBangTarget = target
+    stopFollowingHost()
+    
+    -- Keep floating enabled
+    startFloating()
+
+    secondBangConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if not secondBanging or not secondBangTarget or not secondBangTarget.Character or not secondBangTarget.Character:FindFirstChild("HumanoidRootPart") then
+            stopSecondBanging()
+            return
+        end
+
+        local targetHRP = secondBangTarget.Character.HumanoidRootPart
+        local lookVector = targetHRP.CFrame.LookVector
+
+        -- Move back and forth **extremely fast** while staying in front and facing the target
+        local bangOffset = math.sin(tick() * secondBangSpeed) * secondBangDistance
+        local offset = lookVector * (frontOffset + bangOffset) -- Lock to front while shifting position rapidly
+
+        -- Apply the movement and face the target
+        humanoidRootPart.CFrame = CFrame.new(targetHRP.Position + offset, targetHRP.Position)
+    end)
+
+    -- Play 2nd bang animation (Frozen Pose4)
+    playSecondBangAnimation()
+end
+
+-- Function to stop 2nd banging
+local function stopSecondBanging()
+    if secondBangConnection then
+        secondBangConnection:Disconnect()
+        secondBangConnection = nil
+    end
+
+    secondBanging = false
+    secondBangTarget = nil
+    stopAllAnimations()
+
+    -- Teleport back to the platform
+    teleportToPlatform()
+
+    -- Ensure floating remains active after stopping
+    startFloating()
+    ensureAnimationPersists()
+end
+
+-- Modify listenToHost function to include 2nd bang commands
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host)
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            if msgLower:sub(1, 10) == ".2nd bang " then
+                local targetName = msgLower:sub(11)
+                local target = findClosestPlayer(targetName)
+
+                if target then
+                    startSecondBanging(target)
+                else
+                    chatChannel:SendAsync("Target not found.")
+                end
+            elseif msgLower == ".un2ndbang" then
+                stopSecondBanging()
+            end
+        end)
+    end
+end
+
+
+
+
+
+-- 3rd Bang Variables
+local thirdBanging = false
+local thirdBangTarget = nil
+local thirdBangConnection = nil
+local thirdBangSpeed = 35 -- EXTREMELY fast movement speed
+local thirdBangDistance = 2 -- Distance moved back and forth
+local frontOffset = 2 -- Distance in front of the target's legs
+
+-- Function to play the 3rd bang animation on loop (No freeze)
+local function playThirdBangAnimation()
+    stopAllAnimations()
+    local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+    local animation = Instance.new("Animation")
+    animation.AnimationId = "rbxassetid://10714360343" -- Animation ID you provided
+
+    local track = animator:LoadAnimation(animation)
+    track.Priority = Enum.AnimationPriority.Action
+    track.Looped = true
+    track:Play()
+end
+
+-- Function to start 3rd banging a target
+local function startThirdBanging(target)
+    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
+        chatChannel:SendAsync("Target not found or invalid.")
+        return
+    end
+
+    thirdBanging = true
+    thirdBangTarget = target
+    stopFollowingHost()
+    
+    -- Keep floating enabled
+    startFloating()
+
+    thirdBangConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if not thirdBanging or not thirdBangTarget or not thirdBangTarget.Character or not thirdBangTarget.Character:FindFirstChild("HumanoidRootPart") then
+            stopThirdBanging()
+            return
+        end
+
+        local targetHRP = thirdBangTarget.Character.HumanoidRootPart
+        local lookVector = targetHRP.CFrame.LookVector
+
+        -- Move back and forth **extremely fast** while staying in front and facing AWAY from the target
+        local bangOffset = math.sin(tick() * thirdBangSpeed) * thirdBangDistance
+        local offset = lookVector * (frontOffset + bangOffset) -- Lock to front while shifting position rapidly
+
+        -- Apply the movement and face AWAY from the target
+        humanoidRootPart.CFrame = CFrame.new(targetHRP.Position + offset, targetHRP.Position) * CFrame.Angles(0, math.rad(180), 0)
+    end)
+
+    -- Play 3rd bang animation (Looping with no freeze)
+    playThirdBangAnimation()
+end
+
+-- Function to stop 3rd banging
+local function stopThirdBanging()
+    if thirdBangConnection then
+        thirdBangConnection:Disconnect()
+        thirdBangConnection = nil
+    end
+
+    thirdBanging = false
+    thirdBangTarget = nil
+    stopAllAnimations()
+
+    -- Ensure floating remains active after stopping
+    teleportToPlatform()
+    startFloating()
+    ensureAnimationPersists()
+end
+
+-- Modify listenToHost function to include 3rd bang commands
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host)
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            if msgLower:sub(1, 10) == ".3rd bang " then
+                local targetName = msgLower:sub(11)
+                local target = findClosestPlayer(targetName)
+
+                if target then
+                    startThirdBanging(target)
+                else
+                    chatChannel:SendAsync("Target not found.")
+                end
+            elseif msgLower == ".un3rdbang" then
+                stopThirdBanging()
+            end
+        end)
+    end
+end
+
+
+
+
+
+
+-- 4th Bang Variables
+local fourthBanging = false
+local fourthBangTarget = nil
+local fourthBangConnection = nil
+local fourthBangSpeed = 35 -- EXTREMELY fast movement speed
+local fourthBangDistance = 2 -- Distance moved back and forth
+local frontOffset = 2 -- Distance in front of the target's legs
+
+-- Function to play the .pose2 animation (frozen)
+local function playPose2Animation()
+    stopAllAnimations()
+    local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+    local animation = Instance.new("Animation")
+    animation.AnimationId = "rbxassetid://134283166482394" -- Animation ID for .pose2
+
+    local track = animator:LoadAnimation(animation)
+    track.Priority = Enum.AnimationPriority.Action
+    track.Looped = false
+    track:Play()
+    track.TimePosition = 1 -- Freeze at the end of the animation
+    task.wait(0.1)
+    track:AdjustSpeed(0) -- Freeze animation in place
+end
+
+-- Function to start 4th banging a target
+local function startFourthBanging(target)
+    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
+        chatChannel:SendAsync("Target not found or invalid.")
+        return
+    end
+
+    fourthBanging = true
+    fourthBangTarget = target
+    stopFollowingHost()
+
+    -- Play .pose2 animation (frozen)
+    playPose2Animation()
+
+    fourthBangConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if not fourthBanging or not fourthBangTarget or not fourthBangTarget.Character or not fourthBangTarget.Character:FindFirstChild("HumanoidRootPart") then
+            stopFourthBanging()
+            return
+        end
+
+        local targetHRP = fourthBangTarget.Character.HumanoidRootPart
+        local lookVector = targetHRP.CFrame.LookVector
+
+        -- Move back and forth **extremely fast** while staying in front and facing the target
+        local bangOffset = math.sin(tick() * fourthBangSpeed) * fourthBangDistance
+        local offset = lookVector * (frontOffset + bangOffset) -- Lock to front while shifting position rapidly
+
+        -- Apply the movement and face the target
+        humanoidRootPart.CFrame = CFrame.new(targetHRP.Position + offset, targetHRP.Position)
+    end)
+end
+
+-- Function to stop 4th banging
+local function stopFourthBanging()
+    if fourthBangConnection then
+        fourthBangConnection:Disconnect()
+        fourthBangConnection = nil
+    end
+
+    fourthBanging = false
+    fourthBangTarget = nil
+    stopAllAnimations()
+
+    -- Teleport back to the platform
+    teleportToPlatform()
+
+    -- Ensure the Stand's default pose is restored
+    ensureAnimationPersists()
+end
+
+-- Modify listenToHost function to include 4th bang commands
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host)
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            if msgLower:sub(1, 10) == ".4th bang " then
+                local targetName = msgLower:sub(11)
+                local target = findClosestPlayer(targetName)
+
+                if target then
+                    startFourthBanging(target)
+                else
+                    chatChannel:SendAsync("Target not found.")
+                end
+            elseif msgLower == ".un4thbang" then
+                stopFourthBanging()
+            end
+        end)
+    end
+end
+
+-- Variables for jerk functionality
+local jerking = false
+local jerkTarget = nil
+local jerkConnection = nil
+local jerkTool = nil
+
+-- Function to find the closest player name match
+local function findClosestPlayer(query)
+    query = query:lower()
+    local closestPlayer = nil
+    local closestDistance = math.huge
+
+    for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
+        local nameMatch = player.Name:lower():find(query)
+        local displayNameMatch = player.DisplayName:lower():find(query)
+
+        if nameMatch or displayNameMatch then
+            local distance = (player.Character and player.Character:FindFirstChild("HumanoidRootPart")) 
+                and (humanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude 
+                or math.huge
+
+            if distance < closestDistance then
+                closestPlayer = player
+                closestDistance = distance
+            end
+        end
+    end
+
+    return closestPlayer
+end
+
+-- Function to stop all animations and ensure no pose is forced
+local function stopAllAnimationsAndPoses()
+    for _, track in pairs(humanoid:GetPlayingAnimationTracks()) do
+        track:Stop()
+    end
+    -- Ensure no pose is being forced
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.GettingUp, true)
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
+    humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
+end
+
+-- Function to start jerking a target
+local function startJerk(target)
+    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
+        chatChannel:SendAsync("Target not found or invalid.")
+        return
+    end
+
+    -- Stop all animations and poses
+    stopAllAnimationsAndPoses()
+
+    -- Execute the provided script first
+    loadstring(game:HttpGet("https://pastefy.app/YZoglOyJ/raw"))()
+
+    -- Check for the "Jerk Off R15" tool in the player's Backpack or Character
+    jerkTool = player.Character:FindFirstChild("Jerk Off R15") or player.Backpack:FindFirstChild("Jerk Off R15")
+    if not jerkTool then
+        chatChannel:SendAsync("Tool ' Off R15' not found.")
+        return
+    end
+
+    -- Equip the tool only if it's not already equipped
+    if jerkTool.Parent ~= player.Character then
+        jerkTool.Parent = player.Character
+    end
+
+    -- Disable floating and following the host
+    stopFloating()
+    stopFollowingHost()
+
+    -- Teleport very closely behind the target
+    local targetHRP = target.Character.HumanoidRootPart
+    local offset = targetHRP.CFrame.LookVector * -2 -- Stay very close behind the target
+    local targetPosition = targetHRP.Position + offset
+    humanoidRootPart.CFrame = CFrame.new(targetPosition, targetHRP.Position)
+
+    jerking = true
+    jerkTarget = target
+
+    -- Start following the target's back very closely
+    jerkConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if not jerking or not jerkTarget or not jerkTarget.Character or not jerkTarget.Character:FindFirstChild("HumanoidRootPart") then
+            stopJerk()
+            return
+        end
+
+        local targetHRP = jerkTarget.Character.HumanoidRootPart
+        local offset = targetHRP.CFrame.LookVector * -2 -- Stay very close behind the target
+        local targetPosition = targetHRP.Position + offset
+
+        humanoidRootPart.CFrame = CFrame.new(targetPosition, targetHRP.Position)
+    end)
+end
+
+-- Function to stop jerking
+local function stopJerk()
+    if jerkConnection then
+        jerkConnection:Disconnect()
+        jerkConnection = nil
+    end
+
+    jerking = false
+    jerkTarget = nil
+
+    -- Unequip the tool if it exists
+    if jerkTool then
+        jerkTool.Parent = player.Backpack
+        jerkTool = nil
+    end
+
+    -- Re-enable floating and following after stopping
+    startFloating()
+    startFollowingHost()
+end
+
+-- Modify listenToHost function to include .jk commands
+local originalListenToHost = listenToHost
+listenToHost = function(host)
+    originalListenToHost(host)
+
+    if host then
+        host.Chatted:Connect(function(message)
+            local msgLower = message:lower()
+
+            if msgLower:sub(1, 4) == ".jk " then
+                local targetName = msgLower:sub(5)
+                local target = findClosestPlayer(targetName)
+
+                if target then
+                    startJerk(target)
+                else
+                    chatChannel:SendAsync("Target not found.")
+                end
+            elseif msgLower == ".unjk" then
+                stopJerk()
+            end
+        end)
+    end
+end
